@@ -1,0 +1,164 @@
+# .github/workflows/security-pipeline.yml
+# Учебный DevSecOps-пайплайн для OWASP Juice Shop:
+# Secrets -> SAST (Semgrep + CodeQL) -> SCA + SBOM -> Container/IaC -> DAST (ZAP)
+# Всё в SARIF уходит во вкладку Security, отчёты для DefectDojo — в artifacts.
+#
+# Совет для собеседования: в проде сторонние actions пинят по commit SHA,
+# а docker-образы — по digest, а не по тегу (защита supply chain).
+
+name: security-pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # загрузка SARIF в code scanning
+  actions: read
+
+env:
+  TRIVY_IMAGE: aquasec/trivy:latest          # запинь на конкретную версию
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
+  TARGET_IMAGE: bkimminich/juice-shop:latest # готовый образ, чтобы не собирать 10 минут
+
+jobs:
+  # ---------------------------------------------------------------- SECRETS
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0             # gitleaks смотрит всю историю коммитов
+      - name: Gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest \
+            detect --source /repo --redact \
+            --report-format sarif --report-path /repo/gitleaks.sarif --exit-code 0
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:latest \
+            detect --source /repo --redact \
+            --report-format json --report-path /repo/gitleaks.json --exit-code 0
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+      - uses: actions/upload-artifact@v4
+        with: { name: gitleaks, path: gitleaks.json }
+
+  # ---------------------------------------------------------------- SAST: Semgrep
+  sast-semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Semgrep
+        run: |
+          pip install semgrep
+          semgrep scan \
+            --config p/javascript --config p/typescript \
+            --config p/owasp-top-ten --config p/nodejs \
+            --sarif-output=semgrep.sarif \
+            --json-output=semgrep.json \
+            --metrics=off || true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+      - uses: actions/upload-artifact@v4
+        with: { name: semgrep, path: semgrep.json }
+
+  # ---------------------------------------------------------------- SAST: CodeQL
+  sast-codeql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended     # больше находок, больше шума — хорошо для triage
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: codeql
+
+  # ---------------------------------------------------------------- SCA + SBOM
+  sca:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Ensure lockfile (SCA needs exact versions)
+        run: |
+          [ -f package-lock.json ] || npm install --package-lock-only --ignore-scripts
+      - name: SBOM (CycloneDX)
+        run: |
+          docker run --rm -v "$PWD:/src" $TRIVY_IMAGE \
+            fs --format cyclonedx --output /src/sbom.cdx.json /src
+      - name: Trivy SCA
+        run: |
+          docker run --rm -v "$PWD:/src" $TRIVY_IMAGE \
+            fs --scanners vuln --format sarif --output /src/trivy-fs.sarif /src
+          docker run --rm -v "$PWD:/src" $TRIVY_IMAGE \
+            fs --scanners vuln --format json --output /src/trivy-fs.json /src
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-sca
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sca
+          path: |
+            sbom.cdx.json
+            trivy-fs.json
+
+  # ---------------------------------------------------------------- CONTAINER + IaC
+  container-iac:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy image scan
+        run: |
+          docker pull $TARGET_IMAGE
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" \
+            $TRIVY_IMAGE image --format sarif --output /out/trivy-image.sarif $TARGET_IMAGE
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" \
+            $TRIVY_IMAGE image --format json --output /out/trivy-image.json $TARGET_IMAGE
+      - name: Trivy misconfig (Dockerfile / IaC)
+        run: |
+          docker run --rm -v "$PWD:/src" $TRIVY_IMAGE \
+            config --format sarif --output /src/trivy-config.sarif /src
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+      - uses: actions/upload-artifact@v4
+        with: { name: container, path: trivy-image.json }
+
+  # ---------------------------------------------------------------- DAST
+  dast-zap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start Juice Shop
+        run: |
+          docker run -d --name juice -p 3000:3000 $TARGET_IMAGE
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000 >/dev/null && echo "up" && break
+            sleep 2
+          done
+      - name: ZAP baseline (passive scan)
+        run: |
+          mkdir -p zap && chmod 777 zap
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" $ZAP_IMAGE \
+            zap-baseline.py -t http://localhost:3000 \
+            -r zap-report.html -J zap-report.json -x zap-report.xml -I
+      # Следующий шаг после baseline: zap-full-scan.py (активный скан, дольше и шумнее)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: zap, path: zap/ }
