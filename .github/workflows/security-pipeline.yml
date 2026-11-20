@@ -17,6 +17,9 @@ on:
 permissions:
   contents: read
   security-events: write   # загрузка SARIF в code scanning
+# Code scanning для приватных репо требует GitHub Advanced Security.
+# Загрузка SARIF включается переменной репозитория CODE_SCANNING=true
+# (Settings -> Secrets and variables -> Actions -> Variables). Иначе SARIF только в artifacts.
   actions: read
 
 env:
@@ -41,11 +44,12 @@ jobs:
             detect --source /repo --redact \
             --report-format json --report-path /repo/gitleaks.json --exit-code 0
       - uses: github/codeql-action/upload-sarif@v3
+        if: vars.CODE_SCANNING == 'true'
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
       - uses: actions/upload-artifact@v4
-        with: { name: gitleaks, path: gitleaks.json }
+        with: { name: gitleaks, path: "gitleaks.*" }
 
   # ---------------------------------------------------------------- SAST: Semgrep
   sast-semgrep:
@@ -64,11 +68,12 @@ jobs:
             --json-output=semgrep.json \
             --metrics=off || true
       - uses: github/codeql-action/upload-sarif@v3
+        if: vars.CODE_SCANNING == 'true'
         with:
           sarif_file: semgrep.sarif
           category: semgrep
       - uses: actions/upload-artifact@v4
-        with: { name: semgrep, path: semgrep.json }
+        with: { name: semgrep, path: "semgrep.*" }
 
   # ---------------------------------------------------------------- SAST: CodeQL
   sast-codeql:
@@ -82,6 +87,10 @@ jobs:
       - uses: github/codeql-action/analyze@v3
         with:
           category: codeql
+          upload: ${{ vars.CODE_SCANNING == 'true' && 'always' || 'never' }}
+          output: codeql-results
+      - uses: actions/upload-artifact@v4
+        with: { name: codeql, path: codeql-results/ }
 
   # ---------------------------------------------------------------- SCA + SBOM
   sca:
@@ -104,6 +113,7 @@ jobs:
           docker run --rm -v "$PWD:/src" $TRIVY_IMAGE \
             fs --scanners vuln --format json --output /src/trivy-fs.json /src
       - uses: github/codeql-action/upload-sarif@v3
+        if: vars.CODE_SCANNING == 'true'
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-sca
@@ -113,6 +123,7 @@ jobs:
           path: |
             sbom.cdx.json
             trivy-fs.json
+            trivy-fs.sarif
 
   # ---------------------------------------------------------------- CONTAINER + IaC
   container-iac:
@@ -131,15 +142,22 @@ jobs:
           docker run --rm -v "$PWD:/src" $TRIVY_IMAGE \
             config --format sarif --output /src/trivy-config.sarif /src
       - uses: github/codeql-action/upload-sarif@v3
+        if: vars.CODE_SCANNING == 'true'
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
       - uses: github/codeql-action/upload-sarif@v3
+        if: vars.CODE_SCANNING == 'true'
         with:
           sarif_file: trivy-config.sarif
           category: trivy-config
       - uses: actions/upload-artifact@v4
-        with: { name: container, path: trivy-image.json }
+        with:
+          name: container
+          path: |
+            trivy-image.json
+            trivy-image.sarif
+            trivy-config.sarif
 
   # ---------------------------------------------------------------- DAST
   dast-zap:
