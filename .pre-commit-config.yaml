@@ -1,0 +1,98 @@
+# Универсальный pre-commit конфиг
+# Логика: быстрые проверки — на каждый коммит, тяжёлые — только на push.
+#
+# Установка (macOS):  brew install pre-commit
+# Подключение:        pre-commit install --install-hooks
+# Обновить версии:    pre-commit autoupdate
+# Прогнать всё:       pre-commit run --all-files
+# Прогнать push-хуки: pre-commit run --all-files --hook-stage pre-push
+
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+minimum_pre_commit_version: "3.2.0"
+fail_fast: false
+
+repos:
+  # ------------------------------------------------------------ базовая гигиена
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-merge-conflict
+      - id: check-case-conflict          # Foo.txt vs foo.txt — ломает macOS/Windows
+      - id: check-yaml
+        args: [--allow-multiple-documents]   # K8s-манифесты с ---
+        exclude: ^(charts/.*/templates/)     # Helm-шаблоны не валидный YAML
+      - id: check-json
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-executables-have-shebangs
+      - id: no-commit-to-branch          # прямые коммиты в main/master запрещены
+        args: [--branch, main, --branch, master]
+
+  # ------------------------------------------------------------ секреты
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: detect-private-key           # быстрый первый фильтр
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks                     # сканирует только staged-изменения
+
+  # ------------------------------------------------------------ shell / yaml / CI
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1-1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [-d, "{extends: relaxed, rules: {line-length: {max: 160}}}"]
+        exclude: ^(charts/.*/templates/)
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint                   # линтер GitHub Actions workflow
+
+  # ------------------------------------------------------------ Docker
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.15.1
+    hooks:
+      - id: hadolint-docker              # нужен запущенный Docker
+        # без Docker: brew install hadolint и id: hadolint
+
+  # ------------------------------------------------------------ SAST (на push)
+  - repo: https://github.com/semgrep/semgrep
+    rev: v1.165.0
+    hooks:
+      - id: semgrep
+        stages: [pre-push]
+        args: [--config, p/secrets, --config, p/owasp-top-ten, --error, --metrics=off]
+
+  # ------------------------------------------------------------ IaC (раскомментируй по стеку)
+  # Terraform: нужен установленный terraform (и tflint/trivy для соответствующих хуков)
+  # - repo: https://github.com/antonbabenko/pre-commit-terraform
+  #   rev: v1.96.1
+  #   hooks:
+  #     - id: terraform_fmt
+  #     - id: terraform_validate
+  #     - id: terraform_tflint
+  #     - id: terraform_trivy
+  #       stages: [pre-push]
+  #
+  # Checkov: Terraform / K8s / Helm / Dockerfile политики
+  # - repo: https://github.com/bridgecrewio/checkov
+  #   rev: <последний тег из Releases>
+  #   hooks:
+  #     - id: checkov
+  #       stages: [pre-push]
+  #       args: [--quiet, --compact]

@@ -61,7 +61,7 @@ The `npm run rsn` output will list filenames like `challengeName_1_correct.ts` o
 - **Codefix Files**: Located in `data/static/codefixes/challengeName_*.ts`.
 
 ### 3. Apply Clean Fixes
-Update all `data/static/codefixes/challengeName_*.ts` files to reflect the changes you made in the source file's snippet block. 
+Update all `data/static/codefixes/challengeName_*.ts` files to reflect the changes you made in the source file's snippet block.
 
 - If you changed a non-vulnerable line, update it identically in all codefix files.
 - If you changed a vulnerable line, ensure the `_correct.ts` file reflects the *fixed* version, while the other files retain their respective (incorrect) "fixes" but adapted to the new code structure.

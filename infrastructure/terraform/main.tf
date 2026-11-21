@@ -2,6 +2,7 @@ provider "aws" {
   region = var.aws_region
 }
 
+
 resource "null_resource" "docker_build" {
   triggers = {
     dockerfile_hash = filemd5("${path.module}/../Dockerfile")

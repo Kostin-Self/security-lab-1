@@ -45,7 +45,7 @@ This skill provides instructions for creating and integrating a new Angular Mate
 Add the new theme definition to `frontend/src/styles/theme.scss` and include it in `frontend/src/styles.scss` to apply essential overrides and customizations.
 
 - **Simple Themes**: Use standard Material palettes for primary and tertiary colors.
-  
+
   **In `frontend/src/styles/theme.scss`**:
   ```scss
   $mytheme-config: (
@@ -73,9 +73,9 @@ Add the new theme definition to `frontend/src/styles/theme.scss` and include it 
   ```
 
 - **Complex/Customized Themes**: Use manual overrides in `frontend/src/styles.scss` to achieve a more unique look (e.g., `bluegrey-lightgreen`).
-  
+
   **In `frontend/src/styles/theme.scss`**: Define the basic theme config and class similarly to simple themes.
-  
+
   **In `frontend/src/styles.scss`**: Provide manual CSS variable and component-specific overrides instead of using the `theme-overrides` mixin.
   Example:
   ```scss

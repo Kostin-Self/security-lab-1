@@ -273,7 +273,7 @@ describe('AddressCreateComponent', () => {
         saveResult.complete()
         await fixture.whenStable()
     })
-    
+
     it('should update the address model from the native form controls', async () => {
         const nativeElement = fixture.nativeElement as HTMLElement
         const inputs = nativeElement.querySelectorAll('input')
